@@ -122,6 +122,7 @@ describe('MCP HTTP worker', () => {
     expect(createServer).toHaveBeenCalledWith({
       baseUrl: 'https://api.manifestdocs.ai',
       accessToken: 'user-token',
+      enableSessionState: false,
       defaultHeaders: {
         'X-Manifest-Client': 'mcp-cloud',
         'X-Manifest-Request-Id': 'req_123',

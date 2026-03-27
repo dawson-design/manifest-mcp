@@ -244,6 +244,7 @@ export function createMcpWorker(overrides: Partial<WorkerDependencies> = {}) {
       const server = deps.createServer({
         baseUrl: apiBaseUrl,
         accessToken: bearerToken,
+        enableSessionState: false, // Worker is stateless per request
         defaultHeaders: {
           'X-Manifest-Client': 'mcp-cloud',
           'X-Manifest-Request-Id': requestId,

@@ -5,6 +5,7 @@
 import type { ManifestClient } from '../client.js';
 import { ApiError, ConflictError } from '../client.js';
 import { featureWebUrl } from '../format.js';
+import { countSpecCriteria, detectEscalation, resolveTier } from '../session.js';
 import type {
   CommitRef,
   EvidenceInput,
@@ -195,27 +196,6 @@ function formatPlanAssessment(feature: FeatureWithContext, planText: string): st
   }
 
   return parts.join('\n');
-}
-
-function countSpecCriteria(details: string | null): number {
-  if (!details) return 0;
-  return (details.match(/^- \[ \]/gm) ?? []).length;
-}
-
-function detectEscalation(planText: string): boolean {
-  return /\[COMPLEX\]/i.test(planText);
-}
-
-function resolveTier(
-  stepCount: number,
-  criteriaCount: number,
-  agentEscalated: boolean,
-): 'auto' | 'tracked' | 'full' {
-  if (agentEscalated) return 'full';
-  if (stepCount >= 6) return 'full';
-  if (criteriaCount >= 7) return 'full';
-  if (stepCount <= 2 && criteriaCount <= 3) return 'auto';
-  return 'tracked';
 }
 
 function extractPlanSteps(planText: string): string[] {

@@ -1,7 +1,9 @@
 /**
  * Manifest MCP Server
  *
- * Registers 25 tools with zod schemas, delegates to pure handler functions.
+ * Registers tools with zod schemas, delegates to pure handler functions.
+ * Includes session-scoped workflow state tracking (Layer 1) that appends
+ * advisory warnings to tool results. Non-Claude clients are unaffected.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -49,9 +51,15 @@ import {
 } from './tools/teams.js';
 import type { ProposedFeature } from './types.js';
 import { MANIFEST_INSTRUCTIONS } from './generated/instructions.js';
+import { WorkflowState, evaluateCompletionGates } from './session.js';
 
 function textResult(text: string) {
   return { content: [{ type: 'text' as const, text }] };
+}
+
+function appendWarnings(text: string, warnings: string[]): string {
+  if (warnings.length === 0) return text;
+  return text + '\n\n--- Workflow Notice ---\n' + warnings.join('\n');
 }
 
 // ============================================================
@@ -81,6 +89,8 @@ const ProposedFeatureSchema: z.ZodType<ProposedFeature> = z.lazy(() =>
 
 export function createServer(config?: ManifestClientConfig): McpServer {
   const client = new ManifestClient(config);
+  const enableSessionState = config?.enableSessionState !== false;
+  const session = enableSessionState ? new WorkflowState() : null;
 
   const server = new McpServer(
     { name: 'manifest', version: '0.1.0' },
@@ -180,7 +190,20 @@ export function createServer(config?: ManifestClientConfig): McpServer {
       force: z.boolean().optional().describe('Force start even if claimed. Default false.'),
       claim_metadata: z.string().optional().describe('JSON metadata (branch, worktree, etc.)'),
     },
-    async (params) => textResult(await handleStartFeature(client, params)),
+    async (params) => {
+      const result = await handleStartFeature(client, params);
+      if (session && !result.startsWith('Error')) {
+        session.featureStarted(params.feature_id);
+        // Hydrate proof state from API (handles re-claims of previously proved features)
+        try {
+          const proof = await client.getFeatureProof(params.feature_id);
+          if (proof && (proof as { exit_code?: number }).exit_code === 0) {
+            session.featureProved(params.feature_id);
+          }
+        } catch { /* No proof yet -- normal */ }
+      }
+      return textResult(result);
+    },
   );
 
   server.tool(
@@ -190,7 +213,13 @@ export function createServer(config?: ManifestClientConfig): McpServer {
       feature_id: z.string().describe('Feature UUID or display ID'),
       plan: z.string().describe('Implementation plan text. Prefer a `Plan:` header followed by numbered steps. Include `[COMPLEX]` to escalate.'),
     },
-    async (params) => textResult(await handleAssessPlan(client, params)),
+    async (params) => {
+      const result = await handleAssessPlan(client, params);
+      if (session && !result.startsWith('Error')) {
+        session.advanceToImplement(params.feature_id);
+      }
+      return textResult(result);
+    },
   );
 
   server.tool(
@@ -209,7 +238,13 @@ export function createServer(config?: ManifestClientConfig): McpServer {
       clear_version: z.boolean().optional().describe('Unassign from version'),
       blocked_by: z.array(z.string()).optional().describe('Feature IDs that block this'),
     },
-    async (params) => textResult(await handleUpdateFeature(client, params)),
+    async (params) => {
+      const result = await handleUpdateFeature(client, params);
+      if (session && !result.startsWith('Error') && 'details' in params && params.details) {
+        session.featureSpecUpdated(params.feature_id);
+      }
+      return textResult(result);
+    },
   );
 
   server.tool(
@@ -247,7 +282,13 @@ export function createServer(config?: ManifestClientConfig): McpServer {
       })).optional(),
       commit_sha: z.string().optional().describe('Git commit SHA at time of proving'),
     },
-    async (params) => textResult(await handleProveFeature(client, params)),
+    async (params) => {
+      const result = await handleProveFeature(client, params);
+      if (session && !result.startsWith('Error') && params.exit_code === 0) {
+        session.featureProved(params.feature_id);
+      }
+      return textResult(result);
+    },
   );
 
   server.tool(
@@ -262,7 +303,15 @@ export function createServer(config?: ManifestClientConfig): McpServer {
       ])).describe('Git commit SHAs or {sha, message} objects'),
       backfill: z.boolean().optional().describe('Skip proof/spec requirements. Default false.'),
     },
-    async (params) => textResult(await handleCompleteFeature(client, params)),
+    async (params) => {
+      // Pre-call: evaluate completion gates and collect warnings
+      const warnings = session ? evaluateCompletionGates(session, params.feature_id) : [];
+      const result = await handleCompleteFeature(client, params);
+      if (session && !result.startsWith('Error')) {
+        session.featureCompleted(params.feature_id);
+      }
+      return textResult(appendWarnings(result, warnings));
+    },
   );
 
   // ----------------------------------------------------------

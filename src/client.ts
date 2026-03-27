@@ -82,6 +82,8 @@ export interface ManifestClientConfig {
   apiKey?: string;
   accessToken?: string;
   defaultHeaders?: Record<string, string>;
+  /** Enable session-scoped workflow state tracking. Default true (stdio), set false for stateless transports (Worker). */
+  enableSessionState?: boolean;
 }
 
 const DEFAULT_BASE_URL = 'http://localhost:4242';
